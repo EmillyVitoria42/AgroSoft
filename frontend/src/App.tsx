@@ -107,7 +107,7 @@ export function App() {
             {loading ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                Processando PDF com Gemini IA...
+                Processando PDF com IA...
               </>
             ) : (
               "Extrair Dados da Nota"
