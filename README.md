@@ -195,3 +195,6 @@ Exibição das informações no Frontend
 O projeto encontra-se em desenvolvimento. A funcionalidade de upload e processamento de notas fiscais com extração e classificação automática por Inteligência Artificial está implementada.
 
 As demais funcionalidades previstas na documentação de requisitos serão desenvolvidas nas próximas etapas.
+
+Link do Projeto:
+[https://agrosoft-1-wo38.onrender.com]
