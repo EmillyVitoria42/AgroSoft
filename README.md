@@ -248,6 +248,7 @@ O código da última atualização vem de `RENDER_GIT_COMMIT` (o Render define a
 
 Link do Projeto hospedado:
 https://agrosoft-praticasdesoft.onrender.com
+Key (LLM): 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
 
 
 Link do Youtube: [https://youtu.be/TRZcQpO6AOk]
