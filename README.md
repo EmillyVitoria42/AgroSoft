@@ -218,6 +218,16 @@ O FastAPI entrega o site compilado (`frontend/dist`) **e** a API, então basta *
 
 Variáveis de ambiente: `GROQ_API_KEY`, `GROQ_MODEL`, `AUTH_LOGIN`, `AUTH_PASSWORD`.
 O código da última atualização vem de `RENDER_GIT_COMMIT` (o Render define automaticamente).
+ 
+ O codigo da ultima atualizacao (hash do commit) aparece no topo da tela
+  principal e na tela de login. Ele e lido do proprio GitHub/Render
+  (variavel RENDER_GIT_COMMIT) a cada deploy.
+- Fluxo da Etapa 2: "Lancar NF-e" -> enviar o PDF do DANFE -> o sistema
+  mostra FORNECEDOR / FATURADO / DESPESA com "EXISTE - ID: n" ou
+  "NAO EXISTE" -> "Confirmar e lancar" cria o que faltar, registra o
+  movimento (APAGAR) e a parcela e informa que foi lancado com sucesso.
+- Cadastros nunca sao excluidos: "Excluir" INATIVA e "Reativar" volta a
+  ATIVO.
 
 > **Atenção:** o banco é um arquivo SQLite. No plano gratuito do Render o disco é temporário: os dados
 > são perdidos a cada novo deploy/reinício. Para manter os dados, use um *Persistent Disk* e defina
@@ -230,9 +240,14 @@ O código da última atualização vem de `RENDER_GIT_COMMIT` (o Render define a
   do movimento e parcela, cadastros com inativação/reativação, contas a pagar/receber, login e código
   da última atualização na tela principal.
 
+## Login
+**Login:** admin
+**Senha:** agrosoft123
+
 ## Links
 
 Link do Projeto hospedado:
-[https://agrosoft-1-wo38.onrender.com]
+https://agrosoft-praticasdesoft.onrender.com
+
 
 Link do Youtube: [https://youtu.be/TRZcQpO6AOk]
