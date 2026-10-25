@@ -1,0 +1,18 @@
+.env
+backend/.env
+venv/
+backend/venv/
+node_modules/
+frontend/node_modules/
+__pycache__/
+*.pyc
+.vscode/
+# Banco de dados local (SQLite)
+*.db
+backend/*.db
+
+# Build do frontend
+frontend/dist/
+
+# Readme.txt de entrega (contém login, senha e chave da IA) -> vai só no Classroom
+Readme.txt
