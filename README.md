@@ -60,7 +60,12 @@ A classificação automática utiliza as seguintes categorias:
 - pypdf
 - python-dotenv
 - Groq API
-- SQLite (banco de dados)
+
+### Banco de dados
+
+- **PostgreSQL** (acesso via psycopg2)
+- Produção: **Neon** (PostgreSQL gerenciado, região São Paulo)
+- Desenvolvimento: PostgreSQL local ou Neon
 
 ## Estrutura do projeto
 
@@ -69,7 +74,7 @@ AgroSoft/
 ├── backend/
 │   ├── main.py              # app FastAPI + extração com IA (Groq)
 │   ├── models.py            # modelos Pydantic da nota fiscal
-│   ├── db.py                # SQLite: tabelas e conexão
+│   ├── db.py                # PostgreSQL: tabelas e conexão
 │   ├── servicos.py          # regras de negócio (cadastros, contas, análise/lançamento)
 │   ├── rotas.py             # rotas HTTP
 │   ├── auth.py              # login (token assinado)
@@ -79,6 +84,7 @@ AgroSoft/
 │   └── requirements.txt
 ├── frontend/                # React + Vite + Tailwind
 │   └── src/components/      # Login, ExtrairNota, CrudPage, Contas, ...
+├── docker-compose.yml       # (opcional) PostgreSQL local via Docker
 ├── Dockerfile               # (opcional) hospedagem em um único serviço
 ├── run.sh / run.bat
 └── README.md
@@ -86,13 +92,16 @@ AgroSoft/
 
 ### Entidades do banco
 
-| Tabela | Observações |
-| --- | --- |
-| `pessoas` | tipo `CLIENTE-FORNECEDOR` ou `FATURADO` (razão social, fantasia, CNPJ/CPF, status) |
-| `classificacao` | tipo `DESPESA` ou `RECEITA` (descrição, status) |
-| `movimento_contas` | tipo `APAGAR` ou `ARECEBER` |
-| `movimento_classificacao` | liga o movimento a uma ou mais classificações |
-| `parcela_contas` | identificação `ÚNICA`, `1/3`, `2/3`... com vencimento e valor |
+| Tabela                    | Observações                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `pessoas`                 | tipo `CLIENTE-FORNECEDOR` ou `FATURADO` (razão social, fantasia, CNPJ/CPF, status) |
+| `classificacao`           | tipo `DESPESA` ou `RECEITA` (descrição, status)                                    |
+| `movimento_contas`        | tipo `APAGAR` ou `ARECEBER`                                                        |
+| `movimento_classificacao` | liga o movimento a uma ou mais classificações                                      |
+| `parcela_contas`          | identificação `ÚNICA`, `1/3`, `2/3`... com vencimento e valor                      |
+
+Valores monetários usam `NUMERIC(14,2)` e datas usam `DATE`. As tabelas e a função de busca
+`norm()` (maiúsculas, sem acentos) são criadas automaticamente quando o backend sobe.
 
 ## Configuração
 
@@ -103,9 +112,48 @@ GROQ_API_KEY=SUA_CHAVE_AQUI
 GROQ_MODEL=openai/gpt-oss-20b
 AUTH_LOGIN=admin
 AUTH_PASSWORD=agrosoft123
+DATABASE_URL=postgresql://agrosoft:agrosoft123@localhost:5432/agrosoft
 ```
 
-> O arquivo `.env` não deve ser enviado para o GitHub, pois contém informações privadas.
+> O arquivo `.env` não deve ser enviado para o GitHub, pois contém informações privadas
+> (chave da IA e senha do banco).
+
+### Banco de dados (PostgreSQL)
+
+O sistema exige um PostgreSQL: sem `DATABASE_URL` o backend não sobe. Escolha **uma** das opções
+abaixo e coloque a URL correspondente no `backend/.env`.
+
+**Opção A – Neon (nuvem, a mesma usada em produção)**
+
+1. Crie um projeto em [neon.tech](https://neon.tech) (plano gratuito).
+2. Clique em **Connect**, deixe _Connection pooling_ desmarcado e copie a connection string:
+
+```env
+DATABASE_URL=postgresql://USUARIO:SENHA@ep-xxxx.sa-east-1.aws.neon.tech/neondb?sslmode=require
+```
+
+> Para rodar `testar_servicos.py`, use a string **direta** (sem pooling), pois o teste usa um
+> schema temporário.
+
+**Opção B – PostgreSQL instalado na máquina (Ubuntu/Debian)**
+
+```bash
+sudo apt update
+sudo apt install -y postgresql
+sudo systemctl start postgresql
+sudo -u postgres psql -c "CREATE USER agrosoft WITH PASSWORD 'agrosoft123';"
+sudo -u postgres psql -c "CREATE DATABASE agrosoft OWNER agrosoft;"
+```
+
+Use `DATABASE_URL=postgresql://agrosoft:agrosoft123@localhost:5432/agrosoft`.
+
+**Opção C – Docker (se o Docker estiver instalado e rodando)**
+
+```bash
+docker compose up -d
+```
+
+Sobe um PostgreSQL 16 com o mesmo usuário, senha e banco da opção B.
 
 ## Como executar
 
@@ -163,17 +211,17 @@ npm run dev
 
 Todos exigem login (`Authorization: Bearer <token>`), exceto `POST /api/login` e `GET /api/versao`.
 
-| Método | Rota | Função |
-| --- | --- | --- |
-| POST | `/api/login` | autentica e devolve o token |
-| GET | `/api/versao` | código (hash) da última atualização no GitHub |
-| POST | `/api/extrair-nota` | PDF → dados extraídos pela IA |
-| POST | `/api/analisar-nota` | consulta o banco: EXISTE (ID) / NÃO EXISTE |
-| POST | `/api/lancar-nota` | cria o que falta + movimento + parcela(s) |
-| GET/POST/PUT/DELETE | `/api/pessoas` | fornecedor/cliente e faturado (DELETE = inativar) |
-| GET/POST/PUT/DELETE | `/api/classificacoes` | tipos de despesa e de receita |
-| GET/POST/DELETE | `/api/movimentos` | contas a pagar / a receber |
-| POST | `/api/.../{id}/reativar` | reativa um registro INATIVO |
+| Método              | Rota                     | Função                                            |
+| ------------------- | ------------------------ | ------------------------------------------------- |
+| POST                | `/api/login`             | autentica e devolve o token                       |
+| GET                 | `/api/versao`            | código (hash) da última atualização no GitHub     |
+| POST                | `/api/extrair-nota`      | PDF → dados extraídos pela IA                     |
+| POST                | `/api/analisar-nota`     | consulta o banco: EXISTE (ID) / NÃO EXISTE        |
+| POST                | `/api/lancar-nota`       | cria o que falta + movimento + parcela(s)         |
+| GET/POST/PUT/DELETE | `/api/pessoas`           | fornecedor/cliente e faturado (DELETE = inativar) |
+| GET/POST/PUT/DELETE | `/api/classificacoes`    | tipos de despesa e de receita                     |
+| GET/POST/DELETE     | `/api/movimentos`        | contas a pagar / a receber                        |
+| POST                | `/api/.../{id}/reativar` | reativa um registro INATIVO                       |
 
 Documentação interativa (com o backend rodando): `http://localhost:8000/docs`
 
@@ -186,7 +234,7 @@ Upload da nota fiscal (PDF)
    ↓
 FastAPI: pypdf extrai o texto → Groq (IA) devolve JSON
    ↓
-Consulta no banco: FORNECEDOR / FATURADO / DESPESA
+Consulta no banco (PostgreSQL): FORNECEDOR / FATURADO / DESPESA
    → "EXISTE – ID: n" ou "NÃO EXISTE"
    ↓
 Usuário confirma
@@ -202,52 +250,85 @@ cd backend
 python testar_servicos.py
 ```
 
-Usa um banco temporário e valida: análise EXISTE/NÃO EXISTE, criação do que falta, parcelas,
+Usa um _schema_ temporário no PostgreSQL indicado em `DATABASE_URL` (apagado ao final, então os
+dados reais não são tocados) e valida: análise EXISTE/NÃO EXISTE, criação do que falta, parcelas,
 duplicidade de nota, inativar/reativar, busca por vários termos e contas a receber.
 
-## Hospedagem (Render)
+Resultado esperado: `TODOS OS TESTES PASSARAM`.
 
-O FastAPI entrega o site compilado (`frontend/dist`) **e** a API, então basta **um** serviço.
+## Hospedagem
 
-**Opção 1 – Docker** (usa o `Dockerfile` da raiz): crie um *Web Service* com ambiente **Docker**.
+O FastAPI entrega o site compilado (`frontend/dist`) **e** a API, então basta **um** serviço web
+(Render) e **um** banco (Neon).
+
+### Site (Render)
+
+**Opção 1 – Docker** (usa o `Dockerfile` da raiz): crie um _Web Service_ com ambiente **Docker**.
 
 **Opção 2 – Python nativo:**
 
 - Build: `pip install -r backend/requirements.txt && cd frontend && npm install && npm run build`
 - Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
 
-Variáveis de ambiente: `GROQ_API_KEY`, `GROQ_MODEL`, `AUTH_LOGIN`, `AUTH_PASSWORD`.
+Variáveis de ambiente do Web Service: `GROQ_API_KEY`, `GROQ_MODEL`, `AUTH_LOGIN`, `AUTH_PASSWORD`
+e `DATABASE_URL` (a connection string do Neon, terminada em `?sslmode=require`).
 O código da última atualização vem de `RENDER_GIT_COMMIT` (o Render define automaticamente).
- 
- O codigo da ultima atualizacao (hash do commit) aparece no topo da tela
-  principal e na tela de login. Ele e lido do proprio GitHub/Render
-  (variavel RENDER_GIT_COMMIT) a cada deploy.
-- Fluxo da Etapa 2: "Lancar NF-e" -> enviar o PDF do DANFE -> o sistema
-  mostra FORNECEDOR / FATURADO / DESPESA com "EXISTE - ID: n" ou
-  "NAO EXISTE" -> "Confirmar e lancar" cria o que faltar, registra o
-  movimento (APAGAR) e a parcela e informa que foi lancado com sucesso.
-- Cadastros nunca sao excluidos: "Excluir" INATIVA e "Reativar" volta a
-  ATIVO.
 
-> **Atenção:** o banco é um arquivo SQLite. No plano gratuito do Render o disco é temporário: os dados
-> são perdidos a cada novo deploy/reinício. Para manter os dados, use um *Persistent Disk* e defina
-> `DATABASE_PATH=/var/data/agrosoft.db`, ou migre para PostgreSQL.
+> No plano gratuito, o Render "dorme" após 15 minutos sem acessos e leva cerca de 1 minuto para
+> acordar. Abra o site alguns minutos antes de qualquer apresentação.
+
+### Banco de dados (Neon)
+
+O banco fica no **Neon**, e não no PostgreSQL gratuito do Render, porque este último é apagado
+30 dias após a criação. No Neon os dados persistem entre deploys e reinícios do site.
+
+1. Crie o projeto no Neon (região _AWS South America East 1 – São Paulo_).
+2. Copie a connection string (**Connect** no painel do projeto).
+3. Cole em `DATABASE_URL` no Render e faça o deploy. As tabelas são criadas sozinhas.
+
+> A primeira requisição após um período parado pode demorar alguns segundos, pois o Neon
+> "acorda" o banco automaticamente.
+
+### Backup
+
+Antes de cada entrega, guarde uma cópia dos dados:
+
+```bash
+pg_dump "$DATABASE_URL" -Fc -f backup_agrosoft.dump
+```
+
+Para restaurar em um banco vazio:
+
+```bash
+pg_restore --no-owner -d "$DATABASE_URL" backup_agrosoft.dump
+```
+
+> O `pg_dump` precisa ser da mesma versão do servidor ou mais novo. Se der erro de versão
+> (_server version mismatch_), faça o backup pelo painel do Neon, em **Backup & Restore**.
+> Nunca envie o arquivo de backup para o GitHub: ele contém os dados do sistema.
+
+## Evolução do banco nas próximas etapas
+
+As tabelas são criadas com `CREATE TABLE IF NOT EXISTS`, o que **não altera** tabelas já
+existentes. Se uma etapa futura precisar de uma coluna nova, **não apague o banco**: acrescente a
+alteração em `backend/db.py`, por exemplo:
+
+```sql
+ALTER TABLE movimento_contas ADD COLUMN IF NOT EXISTS observacao TEXT;
+```
+
+Assim os dados já lançados são preservados.
 
 ## Status do projeto
 
 - Etapa 1: upload e extração/classificação de notas fiscais com IA.
 - Etapa 2: análise no banco (EXISTE / NÃO EXISTE), criação de fornecedor/faturado/despesa, lançamento
   do movimento e parcela, cadastros com inativação/reativação, contas a pagar/receber, login e código
-  da última atualização na tela principal.
-
-## Login
-**Login:** admin
-**Senha:** agrosoft123
+  da última atualização na tela principal. Banco de dados em **PostgreSQL** (Neon).
 
 ## Links
 
 Link do Projeto hospedado:
-https://agrosoft-praticasdesoft.onrender.com
-
+[https://agrosoft-1-wo38.onrender.com]
 
 Link do Youtube: [https://youtu.be/TRZcQpO6AOk]

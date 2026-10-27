@@ -56,6 +56,12 @@ def _limpar(texto: Optional[str]) -> str:
     return re.sub(r"\s+", " ", str(texto or "")).strip()
 
 
+def _iso(valor) -> Optional[str]:
+    """DATE do PostgreSQL (date) -> 'AAAA-MM-DD'."""
+
+    return valor.isoformat() if valor is not None else None
+
+
 def _validar_status(status: str) -> str:
 
     status = (status or "").upper()
@@ -133,14 +139,14 @@ def listar_pessoas(conn, tipo: str, q: Optional[str], status: str):
     filtro, params = _filtro_busca(
         _termos_busca(q),
         "coalesce(razao_social,'') || ' ' || coalesce(fantasia,'')"
-        " || ' ' || coalesce(documento,'') || ' ' || id",
+        " || ' ' || coalesce(documento,'') || ' ' || id::text",
         "documento",
     )
 
     linhas = conn.execute(
         "SELECT * FROM pessoas WHERE tipo = ? AND status = ?"
         + filtro
-        + " ORDER BY razao_social COLLATE NOCASE",
+        + " ORDER BY NORM(razao_social)",
         [tipo, status, *params],
     ).fetchall()
 
@@ -238,7 +244,7 @@ def criar_pessoa(
 
     cur = conn.execute(
         "INSERT INTO pessoas (tipo, razao_social, fantasia, documento, "
-        "status) VALUES (?, ?, ?, ?, 'ATIVO')",
+        "status) VALUES (?, ?, ?, ?, 'ATIVO') RETURNING id",
         (
             tipo,
             razao_social,
@@ -247,7 +253,7 @@ def criar_pessoa(
         ),
     )
 
-    return cur.lastrowid
+    return cur.fetchone()["id"]
 
 
 def atualizar_pessoa(
@@ -316,13 +322,13 @@ def listar_classificacoes(conn, tipo, q, status):
 
     filtro, params = _filtro_busca(
         _termos_busca(q),
-        "descricao || ' ' || id",
+        "descricao || ' ' || id::text",
     )
 
     linhas = conn.execute(
         "SELECT * FROM classificacao WHERE tipo = ? AND status = ?"
         + filtro
-        + " ORDER BY descricao COLLATE NOCASE",
+        + " ORDER BY NORM(descricao)",
         [tipo, status, *params],
     ).fetchall()
 
@@ -372,11 +378,11 @@ def criar_classificacao(conn, tipo, descricao) -> int:
 
     cur = conn.execute(
         "INSERT INTO classificacao (tipo, descricao, status) "
-        "VALUES (?, ?, 'ATIVO')",
+        "VALUES (?, ?, 'ATIVO') RETURNING id",
         (tipo, descricao),
     )
 
-    return cur.lastrowid
+    return cur.fetchone()["id"]
 
 
 def atualizar_classificacao(conn, classificacao_id, descricao):
@@ -570,19 +576,20 @@ def criar_movimento(
     cur = conn.execute(
         "INSERT INTO movimento_contas (tipo, numero_documento, "
         "data_emissao, descricao, valor_total, pessoa_id, "
-        "faturado_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'ATIVO')",
+        "faturado_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'ATIVO') "
+        "RETURNING id",
         (
             tipo,
             _limpar(numero_documento) or None,
             data_emissao or None,
             _limpar(descricao) or None,
-            float(total),
+            total,
             pessoa_id,
             faturado_id,
         ),
     )
 
-    movimento_id = cur.lastrowid
+    movimento_id = cur.fetchone()["id"]
 
     for cid in ids:
         conn.execute(
@@ -605,7 +612,7 @@ def criar_movimento(
                 "ÚNICA" if quantidade == 1 else f"{numero}/{quantidade}",
                 numero,
                 vencimento,
-                float(valor),
+                valor,
             ),
         )
 
@@ -626,7 +633,7 @@ SELECT * FROM (
         p.razao_social  AS pessoa,
         f.id            AS faturado_id,
         f.razao_social  AS faturado,
-        (SELECT group_concat(c.descricao, ', ')
+        (SELECT string_agg(c.descricao, ', ' ORDER BY c.descricao)
            FROM movimento_classificacao mc
            JOIN classificacao c ON c.id = mc.classificacao_id
           WHERE mc.movimento_id = m.id) AS classificacoes,
@@ -635,7 +642,7 @@ SELECT * FROM (
     FROM movimento_contas m
     JOIN pessoas p ON p.id = m.pessoa_id
     JOIN pessoas f ON f.id = m.faturado_id
-)
+) AS mov
 WHERE tipo = ? AND status = ?
 """
 
@@ -646,9 +653,9 @@ def movimento_para_dict(row) -> dict:
         "id": row["id"],
         "tipo": row["tipo"],
         "numeroDocumento": row["numero_documento"],
-        "dataEmissao": row["data_emissao"],
+        "dataEmissao": _iso(row["data_emissao"]),
         "descricao": row["descricao"],
-        "valorTotal": row["valor_total"],
+        "valorTotal": float(row["valor_total"]),
         "status": row["status"],
         "pessoaId": row["pessoa_id"],
         "pessoa": row["pessoa"],
@@ -669,7 +676,7 @@ def listar_movimentos(conn, tipo, q, status):
         _termos_busca(q),
         "coalesce(numero_documento,'') || ' ' || coalesce(descricao,'')"
         " || ' ' || pessoa || ' ' || faturado || ' ' || "
-        "coalesce(classificacoes,'') || ' ' || id",
+        "coalesce(classificacoes,'') || ' ' || id::text",
     )
 
     linhas = conn.execute(
@@ -697,8 +704,8 @@ def obter_movimento(conn, movimento_id) -> dict:
             "id": p["id"],
             "identificacao": p["identificacao"],
             "numero": p["numero"],
-            "dataVencimento": p["data_vencimento"],
-            "valor": p["valor"],
+            "dataVencimento": _iso(p["data_vencimento"]),
+            "valor": float(p["valor"]),
         }
         for p in conn.execute(
             "SELECT * FROM parcela_contas WHERE movimento_id = ? "

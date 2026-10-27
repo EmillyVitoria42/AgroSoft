@@ -1,17 +1,25 @@
 """
-Teste das regras de negócio (usa um banco temporário, não mexe no
-banco real).
+Teste das regras de negócio no PostgreSQL.
+
+Usa um SCHEMA temporário dentro do banco indicado em DATABASE_URL
+(backend/.env ou variável de ambiente). Ele é apagado no final, então
+os dados reais não são tocados.
 
     cd backend
     python testar_servicos.py
 """
 
 import os
-import tempfile
+import uuid
+from pathlib import Path
 
-# Banco temporário ANTES de importar db
-_tmp = tempfile.mkdtemp()
-os.environ["DATABASE_PATH"] = os.path.join(_tmp, "teste.db")
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
+
+# Schema temporário ANTES de importar db
+SCHEMA_TESTE = "teste_" + uuid.uuid4().hex[:8]
+os.environ["DATABASE_SCHEMA"] = SCHEMA_TESTE
 
 import db                                              # noqa: E402
 import servicos as s                                   # noqa: E402
@@ -292,5 +300,13 @@ with db.transacao() as conn:
         ),
         "soma das parcelas",
     )
+
+# ---------------------------------------------------------------
+# Limpeza: apaga o schema temporário
+# ---------------------------------------------------------------
+db.DATABASE_SCHEMA = ""
+
+with db.transacao() as conn:
+    conn.execute(f"DROP SCHEMA {SCHEMA_TESTE} CASCADE")
 
 print("TODOS OS TESTES PASSARAM")

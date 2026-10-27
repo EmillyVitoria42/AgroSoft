@@ -7,7 +7,7 @@ frontend/node_modules/
 __pycache__/
 *.pyc
 .vscode/
-# Banco de dados local (SQLite)
+# Arquivos de banco locais (legado)
 *.db
 backend/*.db
 

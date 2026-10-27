@@ -1,0 +1,19 @@
+# PostgreSQL local para desenvolvimento:
+#   docker compose up -d
+# Para parar:  docker compose down      (os dados ficam no volume)
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: agrosoft-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agrosoft
+      POSTGRES_PASSWORD: agrosoft123
+      POSTGRES_DB: agrosoft
+    ports:
+      - "5432:5432"
+    volumes:
+      - agrosoft-dados:/var/lib/postgresql/data
+
+volumes:
+  agrosoft-dados:

@@ -1,5 +1,5 @@
 """
-Camada de banco de dados (SQLite).
+Camada de banco de dados (PostgreSQL).
 
 Entidades (conforme requisitos da Etapa 2):
 
@@ -10,33 +10,57 @@ Entidades (conforme requisitos da Etapa 2):
 
 Regras:
 - Cadastros nunca são excluídos: apenas INATIVADOS (e podem ser REATIVADOS).
+
+Conexão:
+- Variável de ambiente DATABASE_URL (obrigatória), por exemplo:
+  postgresql://usuario:senha@host:5432/agrosoft
+- DATABASE_SCHEMA (opcional): usa um schema separado (os testes usam
+  isso para não mexer nas tabelas reais).
 """
 
 import os
 import re
-import sqlite3
 import unicodedata
 from contextlib import contextmanager
-from pathlib import Path
+
+import psycopg2
+import psycopg2.extras
 
 
-DB_PATH = Path(
-    os.getenv("DATABASE_PATH")
-    or Path(__file__).parent / "agrosoft.db"
-)
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+DATABASE_SCHEMA = os.getenv("DATABASE_SCHEMA", "").strip()
 
 
-SCHEMA = """
+SCHEMA = r"""
+-- Função usada nas buscas: MAIÚSCULAS, sem acentos e sem espaços
+-- repetidos (equivalente ao normalizar_texto() do Python).
+-- Não depende de extensões do PostgreSQL.
+CREATE OR REPLACE FUNCTION norm(texto TEXT) RETURNS TEXT AS $fn$
+    SELECT btrim(
+        regexp_replace(
+            upper(
+                translate(
+                    coalesce(texto, ''),
+                    'áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ',
+                    'aaaaaeeeeiiiiooooouuuucnAAAAAEEEEIIIIOOOOOUUUUCN'
+                )
+            ),
+            '\s+', ' ', 'g'
+        )
+    )
+$fn$ LANGUAGE SQL IMMUTABLE;
+
 CREATE TABLE IF NOT EXISTS pessoas (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    tipo          TEXT NOT NULL
+    id            SERIAL PRIMARY KEY,
+    tipo          VARCHAR(20) NOT NULL
                   CHECK (tipo IN ('CLIENTE-FORNECEDOR', 'FATURADO')),
-    razao_social  TEXT NOT NULL,
-    fantasia      TEXT,
-    documento     TEXT,
-    status        TEXT NOT NULL DEFAULT 'ATIVO'
+    razao_social  VARCHAR(255) NOT NULL,
+    fantasia      VARCHAR(255),
+    documento     VARCHAR(14),
+    status        VARCHAR(10) NOT NULL DEFAULT 'ATIVO'
                   CHECK (status IN ('ATIVO', 'INATIVO')),
-    criado_em     TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    criado_em     TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pessoas_tipo_documento
@@ -44,26 +68,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_pessoas_tipo_documento
     WHERE documento IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS classificacao (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    tipo       TEXT NOT NULL CHECK (tipo IN ('DESPESA', 'RECEITA')),
-    descricao  TEXT NOT NULL,
-    status     TEXT NOT NULL DEFAULT 'ATIVO'
+    id         SERIAL PRIMARY KEY,
+    tipo       VARCHAR(10) NOT NULL CHECK (tipo IN ('DESPESA', 'RECEITA')),
+    descricao  VARCHAR(255) NOT NULL,
+    status     VARCHAR(10) NOT NULL DEFAULT 'ATIVO'
                CHECK (status IN ('ATIVO', 'INATIVO')),
-    criado_em  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    criado_em  TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS movimento_contas (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    tipo              TEXT NOT NULL CHECK (tipo IN ('APAGAR', 'ARECEBER')),
-    numero_documento  TEXT,
-    data_emissao      TEXT,
+    id                SERIAL PRIMARY KEY,
+    tipo              VARCHAR(10) NOT NULL
+                      CHECK (tipo IN ('APAGAR', 'ARECEBER')),
+    numero_documento  VARCHAR(60),
+    data_emissao      DATE,
     descricao         TEXT,
-    valor_total       REAL NOT NULL,
+    valor_total       NUMERIC(14, 2) NOT NULL,
     pessoa_id         INTEGER NOT NULL REFERENCES pessoas (id),
     faturado_id       INTEGER NOT NULL REFERENCES pessoas (id),
-    status            TEXT NOT NULL DEFAULT 'ATIVO'
+    status            VARCHAR(10) NOT NULL DEFAULT 'ATIVO'
                       CHECK (status IN ('ATIVO', 'INATIVO')),
-    criado_em         TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    criado_em         TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS movimento_classificacao (
@@ -73,13 +98,13 @@ CREATE TABLE IF NOT EXISTS movimento_classificacao (
 );
 
 CREATE TABLE IF NOT EXISTS parcela_contas (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    id               SERIAL PRIMARY KEY,
     movimento_id     INTEGER NOT NULL REFERENCES movimento_contas (id),
-    identificacao    TEXT NOT NULL,
+    identificacao    VARCHAR(20) NOT NULL,
     numero           INTEGER NOT NULL,
-    data_vencimento  TEXT NOT NULL,
-    valor            REAL NOT NULL,
-    status           TEXT NOT NULL DEFAULT 'ATIVO'
+    data_vencimento  DATE NOT NULL,
+    valor            NUMERIC(14, 2) NOT NULL,
+    status           VARCHAR(10) NOT NULL DEFAULT 'ATIVO'
                      CHECK (status IN ('ATIVO', 'INATIVO'))
 );
 """
@@ -146,20 +171,66 @@ def rotulo_documento(digitos: str | None) -> str:
 # ============================================================
 
 
-def conectar() -> sqlite3.Connection:
+class Conexao:
+    """
+    Envolve a conexão do psycopg2 para oferecer conn.execute(...),
+    usando "?" como marcador de parâmetro. Assim o restante do
+    sistema (servicos.py) continua escrevendo SQL do mesmo jeito.
+    """
 
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    def __init__(self, bruta):
+        self._bruta = bruta
 
-    conn.row_factory = sqlite3.Row
+    def execute(self, sql: str, params=None):
 
-    conn.execute("PRAGMA foreign_keys = ON")
+        cur = self._bruta.cursor()
 
-    # Permite buscas sem acento / sem diferença de maiúsculas
-    conn.create_function(
-        "NORM", 1, normalizar_texto, deterministic=True
+        if params is None:
+            cur.execute(sql)
+
+        else:
+            # "%" literal precisa ser escapado; "?" vira "%s"
+            cur.execute(
+                sql.replace("%", "%%").replace("?", "%s"),
+                tuple(params),
+            )
+
+        return cur
+
+    def commit(self):
+        self._bruta.commit()
+
+    def rollback(self):
+        self._bruta.rollback()
+
+    def close(self):
+        self._bruta.close()
+
+
+def conectar() -> Conexao:
+
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL não configurada. Defina a URL do PostgreSQL, "
+            "ex.: postgresql://usuario:senha@localhost:5432/agrosoft"
+        )
+
+    opcoes = {}
+
+    if DATABASE_SCHEMA:
+
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", DATABASE_SCHEMA):
+            raise RuntimeError("DATABASE_SCHEMA inválido.")
+
+        opcoes["options"] = f"-c search_path={DATABASE_SCHEMA}"
+
+    bruta = psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=psycopg2.extras.DictCursor,
+        **opcoes,
     )
 
-    return conn
+    return Conexao(bruta)
 
 
 @contextmanager
@@ -184,8 +255,11 @@ def transacao():
 
 
 def iniciar_banco() -> None:
-
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    """Cria o schema (se pedido), a função norm() e as tabelas."""
 
     with transacao() as conn:
-        conn.executescript(SCHEMA)
+
+        if DATABASE_SCHEMA:
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {DATABASE_SCHEMA}")
+
+        conn.execute(SCHEMA)
